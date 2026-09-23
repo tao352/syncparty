@@ -42,6 +42,28 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+app.get('/api/ice-servers', (req, res) => {
+  res.json([
+    {
+      urls: [
+        'stun:stun.l.google.com:19302',
+        'stun:stun1.l.google.com:19302',
+        'stun:stun2.l.google.com:19302',
+        'stun:stun.relay.metered.ca:80'
+      ]
+    },
+    {
+      urls: [
+        'turn:global.relay.metered.ca:80',
+        'turn:global.relay.metered.ca:443',
+        'turns:global.relay.metered.ca:443?transport=tcp'
+      ],
+      username: process.env.TURN_USERNAME || 'openrelayproject',
+      credential: process.env.TURN_CREDENTIAL || 'openrelayproject'
+    }
+  ]);
+});
+
 app.get('/api/room/:roomId', (req, res) => {
   const { roomId } = req.params;
   const room = rooms.get(roomId);
@@ -164,12 +186,27 @@ io.on('connection', (socket) => {
 
   // WebRTC Signaling: relay SDP Offer / Answer / ICE Candidates directly to specific peer
   socket.on('signal', ({ to, signal, streamType }) => {
-    // streamType: 'video' (media stream) or 'voice' (mic audio)
+    const sigType = signal?.sdp?.type || (signal?.candidate ? 'ice-candidate' : 'unknown');
+    console.log(`[Signal] From ${socket.id} -> ${to} [${streamType || 'video'}]: ${sigType}`);
+
     io.to(to).emit('signal', {
       from: socket.id,
       signal,
       streamType: streamType || 'video'
     });
+  });
+
+  // Guest requests stream directly from host
+  socket.on('request-stream', ({ roomId }) => {
+    const targetRoomId = roomId || socket.roomId;
+    if (!targetRoomId) return;
+    const room = rooms.get(targetRoomId);
+    if (room && room.hostId && room.hostId !== socket.id) {
+      console.log(`[Stream Request] Guest ${socket.id} requested video stream from host ${room.hostId}`);
+      io.to(room.hostId).emit('stream-requested', {
+        bySocketId: socket.id
+      });
+    }
   });
 
   // Host sends video state change (play, pause, seek)

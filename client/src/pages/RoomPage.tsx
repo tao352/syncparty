@@ -46,10 +46,12 @@ export const RoomPage: React.FC<RoomPageProps> = ({
   const {
     remoteStream,
     setMediaStream,
+    connectionStatus,
     qualitySettings,
     updateQuality,
     isMicMuted,
     toggleMicrophone,
+    requestStreamFromHost,
   } = useWebRTC({
     socket,
     roomId,
@@ -260,6 +262,8 @@ export const RoomPage: React.FC<RoomPageProps> = ({
           reactions={reactions}
           onOpenQualitySettings={() => setIsQualityModalOpen(true)}
           isAudioDuckingActive={isAudioDuckingActive}
+          connectionStatus={connectionStatus}
+          onRequestStream={requestStreamFromHost}
         />
 
         {/* Chat & Hangout Sidebar (Collapsible in cinema mode) */}

@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import {
   Play,
   Pause,
@@ -12,6 +12,7 @@ import {
   Subtitles,
   FileVideo,
   Radio,
+  RefreshCw,
 } from 'lucide-react';
 import { SubtitleCue, FloatingReaction, VideoSourceType } from '../types';
 import { parseSubtitles } from '../utils/subtitleParser';
@@ -25,6 +26,8 @@ interface VideoPlayerProps {
   reactions: FloatingReaction[];
   onOpenQualitySettings: () => void;
   isAudioDuckingActive?: boolean;
+  connectionStatus?: string;
+  onRequestStream?: () => void;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -36,6 +39,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   reactions,
   onOpenQualitySettings,
   isAudioDuckingActive = false,
+  connectionStatus = 'idle',
+  onRequestStream,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -50,6 +55,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [showControls, setShowControls] = useState(true);
   const [videoSource, setVideoSource] = useState<VideoSourceType>('none');
   const [currentFileName, setCurrentFileName] = useState('');
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
 
   // Subtitles
   const [subtitles, setSubtitles] = useState<SubtitleCue[]>([]);
@@ -63,11 +69,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     if (!videoRef.current) return;
     if (isAudioDuckingActive) {
-      videoRef.current.volume = Math.max(0.2, (isMuted ? 0 : volume) * 0.35);
+      videoRef.current.volume = Math.max(0.15, (isMuted ? 0 : volume) * 0.35);
     } else {
       videoRef.current.volume = isMuted ? 0 : volume;
     }
   }, [isAudioDuckingActive, volume, isMuted, videoRef]);
+
+  // Handle Unmute from browser autoplay restrictions
+  const handleUnmuteAutoplay = () => {
+    if (!videoRef.current) return;
+    videoRef.current.muted = false;
+    videoRef.current.volume = volume || 1;
+    setIsMuted(false);
+    videoRef.current
+      .play()
+      .then(() => {
+        setAutoplayBlocked(false);
+      })
+      .catch((err) => {
+        console.warn('Still cannot unmute:', err);
+      });
+  };
 
   // Attach remote stream to guest video element
   useEffect(() => {
@@ -75,10 +97,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (remoteStream) {
         console.log('[VideoPlayer] Attaching remoteStream to guest player');
         videoRef.current.srcObject = remoteStream;
-        videoRef.current.play().catch((err) => {
-          console.warn('[VideoPlayer] Guest autoplay blocked:', err);
-        });
         setVideoSource('screen'); // treated as live stream
+
+        const playPromise = videoRef.current.play();
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              setIsPlaying(true);
+              setAutoplayBlocked(false);
+            })
+            .catch((err) => {
+              console.warn('[VideoPlayer] Guest unmuted autoplay prevented, playing muted:', err);
+              // Fallback to muted playback so visual stream starts immediately
+              if (videoRef.current) {
+                videoRef.current.muted = true;
+                setIsMuted(true);
+                videoRef.current
+                  .play()
+                  .then(() => {
+                    setIsPlaying(true);
+                    setAutoplayBlocked(true); // Prompts user to click to unmute
+                  })
+                  .catch(() => {
+                    setAutoplayBlocked(true);
+                  });
+              }
+            });
+        }
       } else {
         videoRef.current.srcObject = null;
         setVideoSource('none');
@@ -109,13 +154,40 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   };
 
+  // Helper to capture MediaStream from video element
+  const captureLocalStream = useCallback(() => {
+    if (!videoRef.current) return null;
+    const videoEl = videoRef.current as HTMLVideoElement & {
+      captureStream?: () => MediaStream;
+      mozCaptureStream?: () => MediaStream;
+    };
+    try {
+      const stream = (videoEl.captureStream || videoEl.mozCaptureStream)?.call(videoEl);
+      if (stream) {
+        console.log(
+          `[VideoPlayer] Captured local stream: ${stream.getVideoTracks().length} video, ${
+            stream.getAudioTracks().length
+          } audio tracks`
+        );
+        onStreamReady(stream);
+        return stream;
+      }
+    } catch (err) {
+      console.error('[VideoPlayer] Failed captureStream:', err);
+    }
+    return null;
+  }, [videoRef, onStreamReady]);
+
   // Play / Pause toggle
   const togglePlay = () => {
     if (!videoRef.current) return;
     if (videoRef.current.paused) {
       videoRef.current.play().then(() => {
         setIsPlaying(true);
-        if (isHost) onVideoAction('play', currentFileName);
+        if (isHost) {
+          captureLocalStream();
+          onVideoAction('play', currentFileName);
+        }
       });
     } else {
       videoRef.current.pause();
@@ -176,24 +248,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     videoRef.current.onloadedmetadata = () => {
       setDuration(videoRef.current?.duration || 0);
+      captureLocalStream();
+    };
 
-      // Create WebRTC stream using captureStream()
-      try {
-        const videoEl = videoRef.current as HTMLVideoElement & {
-          captureStream?: () => MediaStream;
-          mozCaptureStream?: () => MediaStream;
-        };
-        const stream = (videoEl.captureStream || videoEl.mozCaptureStream)?.call(videoEl);
-
-        if (stream) {
-          console.log('[VideoPlayer] Successfully captured video stream for WebRTC P2P');
-          onStreamReady(stream);
-        } else {
-          console.warn('[VideoPlayer] captureStream not supported in this browser; fallback to screen share.');
-        }
-      } catch (err) {
-        console.error('[VideoPlayer] Failed to captureStream from video element:', err);
-      }
+    videoRef.current.oncanplay = () => {
+      captureLocalStream();
     };
   };
 
@@ -298,6 +357,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         className="w-full h-full object-contain pointer-events-none"
       />
 
+      {/* Autoplay Unmute Prompt Banner for Guests */}
+      {autoplayBlocked && !isHost && (
+        <button
+          onClick={handleUnmuteAutoplay}
+          className="absolute top-16 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-5 py-2.5 rounded-full bg-gold-500 hover:bg-gold-600 text-cinema-950 font-bold text-xs shadow-2xl shadow-gold-500/40 animate-pulse transition-transform active:scale-95"
+        >
+          <Volume2 className="w-4 h-4 fill-current" />
+          <span>Audio is Muted — Click Here to Unmute Live Sound!</span>
+        </button>
+      )}
+
       {/* Floating Emoji Reactions Layer */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden z-20">
         {reactions.map((reaction) => (
@@ -334,10 +404,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <p className="text-xs text-cinema-400 mb-6">
               {isHost
                 ? 'Drag & drop any video file directly, or choose your screen window with audio.'
-                : 'The host has not started playing a video yet. It will automatically appear here once started.'}
+                : 'The host has not started playing a video yet. Once the host starts, it will play here automatically.'}
             </p>
 
-            {isHost && (
+            {isHost ? (
               <div className="space-y-3">
                 <input
                   ref={fileInputRef}
@@ -369,6 +439,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   <span>Share Screen / Window with Audio</span>
                 </button>
               </div>
+            ) : (
+              <div className="mt-4">
+                <button
+                  onClick={onRequestStream}
+                  className="px-4 py-2 rounded-xl bg-cinema-850 hover:bg-cinema-800 border border-cinema-700 text-xs font-semibold text-cinema-100 flex items-center gap-2 mx-auto transition-colors active:scale-95"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Refresh / Reconnect to Host</span>
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -379,6 +459,35 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <div className="absolute top-4 left-4 z-20 flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-xs font-medium text-white/90">
           <Radio className="w-3.5 h-3.5 text-rose-500 animate-pulse" />
           <span className="truncate max-w-[200px] md:max-w-xs">{currentFileName || 'Live Stream'}</span>
+        </div>
+      )}
+
+      {/* WebRTC Connection Status (Top Right) */}
+      {!isHost && connectionStatus !== 'idle' && (
+        <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+          <button
+            onClick={onRequestStream}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium backdrop-blur-md border transition-all active:scale-95 ${
+              connectionStatus === 'connected'
+                ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+                : connectionStatus === 'connecting'
+                ? 'bg-amber-500/20 border-amber-500/40 text-amber-400'
+                : 'bg-rose-500/20 border-rose-500/40 text-rose-400'
+            }`}
+            title="Click to reconnect / request stream from host"
+          >
+            <span
+              className={`w-2 h-2 rounded-full ${
+                connectionStatus === 'connected'
+                  ? 'bg-emerald-400'
+                  : 'bg-amber-400 animate-ping'
+              }`}
+            />
+            <span className="capitalize">
+              {connectionStatus === 'connected' ? 'P2P Live' : connectionStatus}
+            </span>
+            {connectionStatus !== 'connected' && <RefreshCw className="w-3 h-3 ml-0.5" />}
+          </button>
         </div>
       )}
 
@@ -464,7 +573,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <button
                   onClick={() => subtitleInputRef.current?.click()}
                   className={`p-2 rounded-xl transition-colors ${
-                    subtitles.length > 0 ? 'bg-gold-500/20 text-gold-400 border border-gold-500/30' : 'hover:bg-white/10 text-white/80'
+                    subtitles.length > 0
+                      ? 'bg-gold-500/20 text-gold-400 border border-gold-500/30'
+                      : 'hover:bg-white/10 text-white/80'
                   }`}
                   title={subtitles.length > 0 ? `${subtitles.length} Subtitles Loaded` : 'Load Subtitles (.srt/.vtt)'}
                 >
