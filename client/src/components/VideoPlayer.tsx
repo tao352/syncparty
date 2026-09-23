@@ -1,4 +1,5 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { Socket } from 'socket.io-client';
 import {
   Play,
   Pause,
@@ -7,17 +8,19 @@ import {
   Maximize,
   Minimize,
   Sliders,
-  Upload,
   Monitor,
   Subtitles,
   FileVideo,
   Radio,
   RefreshCw,
+  Sparkles,
 } from 'lucide-react';
 import { SubtitleCue, FloatingReaction, VideoSourceType } from '../types';
 import { parseSubtitles } from '../utils/subtitleParser';
 
 interface VideoPlayerProps {
+  socket: Socket | null;
+  roomId: string;
   isHost: boolean;
   remoteStream: MediaStream | null;
   onStreamReady: (stream: MediaStream | null) => void;
@@ -28,9 +31,13 @@ interface VideoPlayerProps {
   isAudioDuckingActive?: boolean;
   connectionStatus?: string;
   onRequestStream?: () => void;
+  initialLosslessVideo?: boolean;
+  initialStreamUrl?: string | null;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
+  socket,
+  roomId,
   isHost,
   remoteStream,
   onStreamReady,
@@ -41,6 +48,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   isAudioDuckingActive = false,
   connectionStatus = 'idle',
   onRequestStream,
+  initialLosslessVideo,
+  initialStreamUrl,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -56,6 +65,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [videoSource, setVideoSource] = useState<VideoSourceType>('none');
   const [currentFileName, setCurrentFileName] = useState('');
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
+
+  // Lossless HD direct file streaming states
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [isLosslessActive, setIsLosslessActive] = useState<boolean>(false);
 
   // Subtitles
   const [subtitles, setSubtitles] = useState<SubtitleCue[]>([]);
@@ -91,13 +104,207 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       });
   };
 
-  // Attach remote stream to guest video element
+  // Helper to capture MediaStream from video element with 30fps and detail hint
+  const captureLocalStream = useCallback(() => {
+    if (!videoRef.current) return null;
+    const videoEl = videoRef.current as HTMLVideoElement & {
+      captureStream?: (fps?: number) => MediaStream;
+      mozCaptureStream?: (fps?: number) => MediaStream;
+    };
+    try {
+      const stream = (videoEl.captureStream || videoEl.mozCaptureStream)?.call(videoEl, 30);
+      if (stream) {
+        stream.getVideoTracks().forEach((track) => {
+          (track as any).contentHint = 'detail';
+        });
+        console.log(
+          `[VideoPlayer] Captured local stream with detail hint: ${stream.getVideoTracks().length} video, ${
+            stream.getAudioTracks().length
+          } audio tracks`
+        );
+        onStreamReady(stream);
+        return stream;
+      }
+    } catch (err) {
+      console.error('[VideoPlayer] Failed captureStream:', err);
+    }
+    return null;
+  }, [videoRef, onStreamReady]);
+
+  // Upload file for Lossless Direct Stream (Runs instantly on localhost)
+  const uploadFileForLosslessStream = useCallback(
+    (file: File) => {
+      setUploadProgress(0);
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api/room/${roomId}/upload`, true);
+      xhr.setRequestHeader('x-file-name', encodeURIComponent(file.name));
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const percent = Math.round((e.loaded / e.total) * 100);
+          setUploadProgress(percent);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          console.log('[VideoPlayer] Upload complete! Lossless stream ready on server.');
+          setIsLosslessActive(true);
+          setUploadProgress(null);
+        } else {
+          console.warn('[VideoPlayer] Upload ended with status:', xhr.status);
+          setUploadProgress(null);
+        }
+      };
+
+      xhr.onerror = () => {
+        console.warn('[VideoPlayer] Upload network error.');
+        setUploadProgress(null);
+      };
+
+      xhr.send(file);
+    },
+    [roomId]
+  );
+
+  // Host loads local video file
+  const handleFileSelect = (file: File) => {
+    if (!videoRef.current) return;
+
+    // 1. Host plays local video immediately with zero wait time
+    const fileUrl = URL.createObjectURL(file);
+    videoRef.current.srcObject = null;
+    videoRef.current.src = fileUrl;
+    setCurrentFileName(file.name);
+    setVideoSource('local');
+    setIsLosslessActive(false);
+
+    videoRef.current.onloadedmetadata = () => {
+      setDuration(videoRef.current?.duration || 0);
+      captureLocalStream();
+    };
+
+    videoRef.current.oncanplay = () => {
+      captureLocalStream();
+    };
+
+    // 2. Concurrently upload to local server to activate 100% uncompressed Lossless HD stream for all guests
+    uploadFileForLosslessStream(file);
+  };
+
+  // Host starts screen / window sharing
+  const handleStartScreenShare = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          displaySurface: 'window',
+          frameRate: 60,
+        },
+        audio: true, // share system audio
+      });
+
+      stream.getVideoTracks().forEach((track) => {
+        (track as any).contentHint = 'detail';
+      });
+
+      if (videoRef.current) {
+        videoRef.current.src = '';
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+      }
+
+      setVideoSource('screen');
+      setCurrentFileName('Live Screen / Window Stream');
+      setIsLosslessActive(false);
+      onStreamReady(stream);
+
+      // Handle when user stops sharing via browser bar
+      stream.getVideoTracks()[0].onended = () => {
+        setVideoSource('none');
+        onStreamReady(null);
+        if (videoRef.current) {
+          videoRef.current.srcObject = null;
+        }
+      };
+    } catch (err) {
+      console.warn('[VideoPlayer] Screen share cancelled or rejected:', err);
+    }
+  };
+
+  // Lossless Video socket listener (Guest receives 100% original stream from server)
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleLosslessReady = ({
+      streamUrl,
+      fileName,
+    }: {
+      streamUrl: string;
+      fileName: string;
+    }) => {
+      console.log(`[VideoPlayer] Lossless HD stream ready: ${streamUrl}`);
+      if (!videoRef.current) return;
+
+      setIsLosslessActive(true);
+      setVideoSource('lossless');
+      setCurrentFileName(fileName);
+      setUploadProgress(null);
+
+      // Guests connect their HTML5 video tag directly to the server HTTP 206 range stream!
+      if (!isHost) {
+        console.log('[VideoPlayer] Guest switching to Lossless HTTP 206 Range Stream!');
+        videoRef.current.srcObject = null;
+        videoRef.current.src = streamUrl;
+        videoRef.current.load();
+
+        const playPromise = videoRef.current.play();
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              setIsPlaying(true);
+              setAutoplayBlocked(false);
+            })
+            .catch((err) => {
+              console.warn('[VideoPlayer] Autoplay blocked for lossless stream; trying muted:', err);
+              if (videoRef.current) {
+                videoRef.current.muted = true;
+                setIsMuted(true);
+                videoRef.current
+                  .play()
+                  .then(() => {
+                    setIsPlaying(true);
+                    setAutoplayBlocked(true);
+                  })
+                  .catch(() => setAutoplayBlocked(true));
+              }
+            });
+        }
+      }
+    };
+
+    socket.on('lossless-video-ready', handleLosslessReady);
+
+    // If joining while a lossless video already exists
+    if (!isHost && initialLosslessVideo && initialStreamUrl) {
+      handleLosslessReady({
+        streamUrl: initialStreamUrl,
+        fileName: 'Cinema Stream',
+      });
+    }
+
+    return () => {
+      socket.off('lossless-video-ready', handleLosslessReady);
+    };
+  }, [socket, isHost, initialLosslessVideo, initialStreamUrl, videoRef]);
+
+  // Attach remote WebRTC stream to guest video element (if screen sharing is used)
   useEffect(() => {
     if (!isHost && videoRef.current) {
-      if (remoteStream) {
-        console.log('[VideoPlayer] Attaching remoteStream to guest player');
+      // Only attach WebRTC if we are not already playing a lossless stream
+      if (remoteStream && videoSource !== 'lossless') {
+        console.log('[VideoPlayer] Attaching WebRTC remoteStream to guest player');
         videoRef.current.srcObject = remoteStream;
-        setVideoSource('screen'); // treated as live stream
+        setVideoSource('screen');
 
         const playPromise = videoRef.current.play();
         if (playPromise !== undefined) {
@@ -108,7 +315,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             })
             .catch((err) => {
               console.warn('[VideoPlayer] Guest unmuted autoplay prevented, playing muted:', err);
-              // Fallback to muted playback so visual stream starts immediately
               if (videoRef.current) {
                 videoRef.current.muted = true;
                 setIsMuted(true);
@@ -116,7 +322,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   .play()
                   .then(() => {
                     setIsPlaying(true);
-                    setAutoplayBlocked(true); // Prompts user to click to unmute
+                    setAutoplayBlocked(true);
                   })
                   .catch(() => {
                     setAutoplayBlocked(true);
@@ -124,12 +330,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               }
             });
         }
-      } else {
+      } else if (!remoteStream && videoSource === 'screen') {
         videoRef.current.srcObject = null;
         setVideoSource('none');
       }
     }
-  }, [isHost, remoteStream, videoRef]);
+  }, [isHost, remoteStream, videoSource, videoRef]);
 
   // Video time update & subtitle tracking
   const handleTimeUpdate = () => {
@@ -153,30 +359,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setDuration(videoRef.current.duration || 0);
     }
   };
-
-  // Helper to capture MediaStream from video element
-  const captureLocalStream = useCallback(() => {
-    if (!videoRef.current) return null;
-    const videoEl = videoRef.current as HTMLVideoElement & {
-      captureStream?: () => MediaStream;
-      mozCaptureStream?: () => MediaStream;
-    };
-    try {
-      const stream = (videoEl.captureStream || videoEl.mozCaptureStream)?.call(videoEl);
-      if (stream) {
-        console.log(
-          `[VideoPlayer] Captured local stream: ${stream.getVideoTracks().length} video, ${
-            stream.getAudioTracks().length
-          } audio tracks`
-        );
-        onStreamReady(stream);
-        return stream;
-      }
-    } catch (err) {
-      console.error('[VideoPlayer] Failed captureStream:', err);
-    }
-    return null;
-  }, [videoRef, onStreamReady]);
 
   // Play / Pause toggle
   const togglePlay = () => {
@@ -236,60 +418,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   };
 
-  // Host loads local video file
-  const handleFileSelect = (file: File) => {
-    if (!videoRef.current) return;
-
-    const fileUrl = URL.createObjectURL(file);
-    videoRef.current.srcObject = null;
-    videoRef.current.src = fileUrl;
-    setCurrentFileName(file.name);
-    setVideoSource('local');
-
-    videoRef.current.onloadedmetadata = () => {
-      setDuration(videoRef.current?.duration || 0);
-      captureLocalStream();
-    };
-
-    videoRef.current.oncanplay = () => {
-      captureLocalStream();
-    };
-  };
-
-  // Host starts screen / window sharing
-  const handleStartScreenShare = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          displaySurface: 'window',
-          frameRate: 60,
-        },
-        audio: true, // share system audio
-      });
-
-      if (videoRef.current) {
-        videoRef.current.src = '';
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-      }
-
-      setVideoSource('screen');
-      setCurrentFileName('Live Screen / Window Stream');
-      onStreamReady(stream);
-
-      // Handle when user stops sharing via browser bar
-      stream.getVideoTracks()[0].onended = () => {
-        setVideoSource('none');
-        onStreamReady(null);
-        if (videoRef.current) {
-          videoRef.current.srcObject = null;
-        }
-      };
-    } catch (err) {
-      console.warn('[VideoPlayer] Screen share cancelled or rejected:', err);
-    }
-  };
-
   // Subtitle file parser
   const handleSubtitleFile = async (file: File) => {
     try {
@@ -337,6 +465,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (isPlaying) setShowControls(false);
     }, 2800);
   };
+
+  const isFilePlayback = videoSource === 'local' || videoSource === 'lossless';
 
   return (
     <div
@@ -403,7 +533,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </h3>
             <p className="text-xs text-cinema-400 mb-6">
               {isHost
-                ? 'Drag & drop any video file directly, or choose your screen window with audio.'
+                ? 'Choose a video file for 100% Lossless Original Quality, or share your screen.'
                 : 'The host has not started playing a video yet. Once the host starts, it will play here automatically.'}
             </p>
 
@@ -419,10 +549,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="w-full py-3 px-4 rounded-xl bg-gold-500 hover:bg-gold-600 active:scale-[0.98] text-cinema-950 font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-gold-500/20 transition-all"
+                  className="w-full py-3.5 px-4 rounded-xl bg-gold-500 hover:bg-gold-600 active:scale-[0.98] text-cinema-950 font-semibold text-xs flex flex-col items-center justify-center gap-1 shadow-lg shadow-gold-500/20 transition-all"
                 >
-                  <Upload className="w-4 h-4" />
-                  <span>Choose Local Video (MP4, WebM, MKV)</span>
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 fill-current" />
+                    <span className="font-bold">Play Video File (100% Original Lossless HD)</span>
+                  </div>
+                  <span className="text-[10px] text-cinema-950/80 font-normal">
+                    Zero blur, pristine 1080p/4K buffer streaming (MP4, WebM, MKV)
+                  </span>
                 </button>
 
                 <div className="flex items-center gap-3 my-2">
@@ -436,7 +571,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   className="w-full py-2.5 px-4 rounded-xl bg-cinema-850 hover:bg-cinema-800 border border-cinema-700/80 active:scale-[0.98] text-cinema-100 font-medium text-xs flex items-center justify-center gap-2 transition-all"
                 >
                   <Monitor className="w-4 h-4 text-cinema-400" />
-                  <span>Share Screen / Window with Audio</span>
+                  <span>Share Screen / Window with Audio (1080p 60FPS)</span>
                 </button>
               </div>
             ) : (
@@ -454,16 +589,36 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Live Badge (Top Left) */}
+      {/* Stream Quality Badges (Top Left) */}
       {videoSource !== 'none' && (
-        <div className="absolute top-4 left-4 z-20 flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-xs font-medium text-white/90">
-          <Radio className="w-3.5 h-3.5 text-rose-500 animate-pulse" />
-          <span className="truncate max-w-[200px] md:max-w-xs">{currentFileName || 'Live Stream'}</span>
+        <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
+          {/* Main Title Badge */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-xs font-medium text-white/90">
+            {isLosslessActive || videoSource === 'lossless' ? (
+              <Sparkles className="w-3.5 h-3.5 text-gold-400 fill-current animate-pulse" />
+            ) : (
+              <Radio className="w-3.5 h-3.5 text-rose-500 animate-pulse" />
+            )}
+            <span className="truncate max-w-[180px] md:max-w-xs">
+              {currentFileName || 'Cinema Stream'}
+            </span>
+          </div>
+
+          {/* Lossless Status or Upload Progress */}
+          {uploadProgress !== null ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gold-500/20 border border-gold-500/40 text-[11px] font-semibold text-gold-300 backdrop-blur-md animate-pulse">
+              <span>Preparing HD Stream: {uploadProgress}%</span>
+            </div>
+          ) : isLosslessActive || videoSource === 'lossless' ? (
+            <div className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-[11px] font-semibold text-emerald-300 backdrop-blur-md">
+              <span>🌟 Lossless 1080p/4K</span>
+            </div>
+          ) : null}
         </div>
       )}
 
       {/* WebRTC Connection Status (Top Right) */}
-      {!isHost && connectionStatus !== 'idle' && (
+      {!isHost && connectionStatus !== 'idle' && videoSource !== 'lossless' && (
         <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
           <button
             onClick={onRequestStream}
@@ -497,8 +652,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           showControls || !isPlaying ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
-        {/* Seek Bar (Visible for local video files) */}
-        {videoSource === 'local' && (
+        {/* Seek Bar (Visible for local video files & lossless direct streams) */}
+        {isFilePlayback && (
           <div className="relative mb-3 group/seek">
             <input
               type="range"
@@ -519,7 +674,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <div className="flex items-center justify-between text-white">
           <div className="flex items-center gap-4">
             {/* Play/Pause (Host Only) */}
-            {isHost && videoSource === 'local' && (
+            {isHost && isFilePlayback && (
               <button
                 onClick={togglePlay}
                 className="p-2 rounded-xl bg-white/10 hover:bg-white/20 active:scale-[0.95] text-white transition-all"
@@ -549,7 +704,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </div>
 
             {/* Time Indicator */}
-            {videoSource === 'local' && (
+            {isFilePlayback && (
               <div className="text-xs font-mono text-white/70">
                 <span>{formatTime(currentTime)}</span>
                 <span className="mx-1 text-white/40">/</span>

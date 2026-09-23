@@ -57,11 +57,11 @@ export function useWebRTC({
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  // Default to 720p @ 30fps at 1500 kbps (1.5 Mbps) for buttery smooth streaming on standard home upload
+  // Default to 1080p @ 30fps at 4500 kbps (4.5 Mbps) for crisp, clear streaming
   const [qualitySettings, setQualitySettings] = useState<QualitySettings>({
-    resolution: '720p',
+    resolution: '1080p',
     frameRate: 30,
-    bitrateKbps: 1500,
+    bitrateKbps: 4500,
     hardwareAcceleration: true,
   });
 
@@ -91,32 +91,41 @@ export function useWebRTC({
         const videoSender = senders.find((s) => s.track && s.track.kind === 'video');
         if (!videoSender) return;
 
+        // Apply contentHint = detail to prevent encoder blurring
+        if (videoSender.track) {
+          (videoSender.track as any).contentHint = 'detail';
+        }
+
         const params = videoSender.getParameters();
         if (!params.encodings || params.encodings.length === 0) {
           params.encodings = [{}];
         }
 
-        // CRITICAL FIX: Prioritize smooth framerate over resolution to eliminate lag and stutter!
-        (params as any).degradationPreference = 'maintain-framerate';
+        // CRITICAL FOR QUALITY: maintain-resolution prevents WebRTC from dropping resolution or blurring the video!
+        (params as any).degradationPreference =
+          settings.resolution === '480p' ? 'balanced' : 'maintain-resolution';
 
         if (settings.bitrateKbps > 0) {
           params.encodings[0].maxBitrate = settings.bitrateKbps * 1000;
         } else {
-          params.encodings[0].maxBitrate = 1500 * 1000;
+          params.encodings[0].maxBitrate = 4500 * 1000;
         }
 
         params.encodings[0].maxFramerate = settings.frameRate;
 
-        if (settings.resolution === '720p') {
-          params.encodings[0].scaleResolutionDownBy = 1.5;
+        // Ensure 1080p and 720p maintain native 1.0 scale without downscale blur
+        if (settings.resolution === '1080p') {
+          params.encodings[0].scaleResolutionDownBy = 1.0;
+        } else if (settings.resolution === '720p') {
+          params.encodings[0].scaleResolutionDownBy = 1.0;
         } else if (settings.resolution === '480p') {
-          params.encodings[0].scaleResolutionDownBy = 2.25;
+          params.encodings[0].scaleResolutionDownBy = 1.5;
         } else {
           params.encodings[0].scaleResolutionDownBy = 1.0;
         }
 
         await videoSender.setParameters(params);
-        console.log(`[WebRTC] Set quality: ${settings.resolution} @ ${settings.frameRate}fps, ${settings.bitrateKbps}kbps (maintain-framerate)`);
+        console.log(`[WebRTC] Set quality: ${settings.resolution} @ ${settings.frameRate}fps, ${settings.bitrateKbps}kbps (${(params as any).degradationPreference})`);
       } catch (err) {
         console.warn('[WebRTC] setParameters failed:', err);
       }
@@ -378,6 +387,11 @@ export function useWebRTC({
       }
 
       console.log(`[WebRTC] setMediaStream: new stream with ${stream.getTracks().length} tracks!`);
+
+      // Guarantee detail sharpness for all video tracks
+      stream.getVideoTracks().forEach((track) => {
+        (track as any).contentHint = 'detail';
+      });
 
       // For every connected peer, update tracks and renegotiate offer
       for (const [targetSocketId, pc] of peerConnections.current.entries()) {

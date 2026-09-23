@@ -22,6 +22,8 @@ interface RoomPageProps {
   currentUser: { name: string; socketId: string };
   initialParticipants: Participant[];
   initialVideoState?: VideoState;
+  initialLosslessVideo?: boolean;
+  initialStreamUrl?: string | null;
   onLeaveRoom: () => void;
 }
 
@@ -31,6 +33,8 @@ export const RoomPage: React.FC<RoomPageProps> = ({
   isHost,
   currentUser,
   initialParticipants,
+  initialLosslessVideo,
+  initialStreamUrl,
   onLeaveRoom,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -288,6 +292,8 @@ export const RoomPage: React.FC<RoomPageProps> = ({
           }`}
         >
           <VideoPlayer
+            socket={socket}
+            roomId={roomId}
             isHost={isHost}
             remoteStream={remoteStream}
             onStreamReady={setMediaStream}
@@ -298,6 +304,8 @@ export const RoomPage: React.FC<RoomPageProps> = ({
             isAudioDuckingActive={isAudioDuckingActive}
             connectionStatus={connectionStatus}
             onRequestStream={requestStreamFromHost}
+            initialLosslessVideo={initialLosslessVideo}
+            initialStreamUrl={initialStreamUrl}
           />
         </div>
 

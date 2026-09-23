@@ -21,31 +21,31 @@ export const QualitySettingsModal: React.FC<QualitySettingsModalProps> = ({
 
   const presets = [
     {
+      id: 'cinema',
+      name: 'Cinema 1080p 🌟',
+      desc: 'Crystal-clear sharp HD',
+      icon: Film,
+      resolution: '1080p' as ResolutionPreset,
+      frameRate: 30 as FrameRatePreset,
+      bitrateKbps: 4500,
+    },
+    {
       id: 'fast',
-      name: 'Ultra Smooth ⚡',
-      desc: 'Zero lag on home internet',
+      name: 'Smooth 720p ⚡',
+      desc: 'Clean & light bandwidth',
       icon: Zap,
       resolution: '720p' as ResolutionPreset,
       frameRate: 30 as FrameRatePreset,
-      bitrateKbps: 1500,
+      bitrateKbps: 2500,
     },
     {
       id: 'saver',
       name: 'Mobile Saver 📱',
-      desc: 'Lightweight for mobile data',
+      desc: 'Lowest data usage',
       icon: Smartphone,
       resolution: '480p' as ResolutionPreset,
       frameRate: 24 as FrameRatePreset,
-      bitrateKbps: 800,
-    },
-    {
-      id: 'cinema',
-      name: 'Cinema 1080p 🌟',
-      desc: 'High upload fiber required',
-      icon: Film,
-      resolution: '1080p' as ResolutionPreset,
-      frameRate: 30 as FrameRatePreset,
-      bitrateKbps: 3000,
+      bitrateKbps: 1000,
     },
   ];
 
@@ -177,7 +177,7 @@ export const QualitySettingsModal: React.FC<QualitySettingsModalProps> = ({
             <input
               type="range"
               min="500"
-              max="5000"
+              max="8000"
               step="250"
               disabled={!isHost}
               value={settings.bitrateKbps}
@@ -185,9 +185,9 @@ export const QualitySettingsModal: React.FC<QualitySettingsModalProps> = ({
               className={`w-full accent-gold-500 ${!isHost ? 'opacity-60 cursor-not-allowed' : ''}`}
             />
             <div className="flex justify-between text-[10px] text-cinema-600 mt-1">
-              <span>0.5 Mbps (Light)</span>
-              <span>1.5 Mbps (Recommended)</span>
-              <span>5.0 Mbps (Fast Fiber)</span>
+              <span>0.5 Mbps (Saver)</span>
+              <span>4.5 Mbps (HD Default)</span>
+              <span>8.0 Mbps (Ultra HD)</span>
             </div>
           </div>
         </div>

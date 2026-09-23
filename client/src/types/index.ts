@@ -37,7 +37,7 @@ export interface SubtitleCue {
   text: string;
 }
 
-export type VideoSourceType = 'none' | 'local' | 'screen';
+export type VideoSourceType = 'none' | 'local' | 'screen' | 'lossless';
 
 export type ResolutionPreset = '1080p' | '720p' | '480p';
 export type FrameRatePreset = 60 | 30 | 24;

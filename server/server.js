@@ -64,6 +64,99 @@ app.get('/api/ice-servers', (req, res) => {
   ]);
 });
 
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Upload endpoint for lossless direct streaming
+app.post('/api/room/:roomId/upload', (req, res) => {
+  const { roomId } = req.params;
+  const rawFileName = req.headers['x-file-name'] || 'video.mp4';
+  const fileName = decodeURIComponent(rawFileName);
+  const filePath = path.join(uploadsDir, `${roomId}_${Date.now()}.mp4`);
+  const writeStream = fs.createWriteStream(filePath);
+
+  req.pipe(writeStream);
+
+  writeStream.on('finish', () => {
+    console.log(`[Lossless Stream] File ready for room ${roomId}: ${fileName} (${filePath})`);
+    const room = rooms.get(roomId);
+    if (room) {
+      // Clean previous file if exists
+      if (room.videoFilePath && fs.existsSync(room.videoFilePath)) {
+        try { fs.unlinkSync(room.videoFilePath); } catch (e) {}
+      }
+      room.videoFilePath = filePath;
+      room.videoState.fileName = fileName;
+      io.to(roomId).emit('lossless-video-ready', {
+        streamUrl: `/api/room/${roomId}/video-stream`,
+        fileName,
+      });
+    }
+    res.json({ success: true, streamUrl: `/api/room/${roomId}/video-stream` });
+  });
+
+  writeStream.on('error', (err) => {
+    console.error('[Lossless Stream] Error saving video:', err);
+    res.status(500).json({ error: 'Failed to upload video' });
+  });
+});
+
+// Stream endpoint with HTTP 206 Partial Content (Range requests) - 100% original quality!
+app.get('/api/room/:roomId/video-stream', (req, res) => {
+  const { roomId } = req.params;
+  const room = rooms.get(roomId);
+  if (!room || !room.videoFilePath || !fs.existsSync(room.videoFilePath)) {
+    return res.status(404).send('Video not found or not uploaded yet');
+  }
+
+  const filePath = room.videoFilePath;
+  const stat = fs.statSync(filePath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+
+  // Determine mime type from extension
+  const ext = path.extname(room.videoState?.fileName || '').toLowerCase();
+  let contentType = 'video/mp4';
+  if (ext === '.webm') contentType = 'video/webm';
+  else if (ext === '.ogg' || ext === '.ogv') contentType = 'video/ogg';
+  else if (ext === '.mov') contentType = 'video/quicktime';
+
+  if (range) {
+    const parts = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+    if (start >= fileSize) {
+      res.status(416).send('Requested range not satisfiable\n' + start + ' >= ' + fileSize);
+      return;
+    }
+
+    const chunksize = end - start + 1;
+    const file = fs.createReadStream(filePath, { start, end });
+    const head = {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunksize,
+      'Content-Type': contentType,
+      'Access-Control-Allow-Origin': '*',
+    };
+
+    res.writeHead(206, head);
+    file.pipe(res);
+  } else {
+    const head = {
+      'Content-Length': fileSize,
+      'Content-Type': contentType,
+      'Accept-Ranges': 'bytes',
+      'Access-Control-Allow-Origin': '*',
+    };
+    res.writeHead(200, head);
+    fs.createReadStream(filePath).pipe(res);
+  }
+});
+
 app.get('/api/room/:roomId', (req, res) => {
   const { roomId } = req.params;
   const room = rooms.get(roomId);
@@ -73,7 +166,9 @@ app.get('/api/room/:roomId', (req, res) => {
   return res.json({
     exists: true,
     hasPassword: Boolean(room.password),
-    participantsCount: room.participants.size
+    participantsCount: room.participants.size,
+    hasLosslessVideo: Boolean(room.videoFilePath && fs.existsSync(room.videoFilePath)),
+    streamUrl: room.videoFilePath ? `/api/room/${roomId}/video-stream` : null,
   });
 });
 
@@ -172,6 +267,9 @@ io.on('connection', (socket) => {
       allParticipants: Array.from(room.participants.values())
     });
 
+    const hasLosslessVideo = Boolean(room.videoFilePath && fs.existsSync(room.videoFilePath));
+    const streamUrl = hasLosslessVideo ? `/api/room/${cleanRoomId}/video-stream` : null;
+
     if (typeof callback === 'function') {
       callback({
         success: true,
@@ -179,7 +277,17 @@ io.on('connection', (socket) => {
         isHost: participant.isHost,
         hostId: room.hostId,
         participants: Array.from(room.participants.values()),
-        videoState: room.videoState
+        videoState: room.videoState,
+        hasLosslessVideo,
+        streamUrl,
+      });
+    }
+
+    // If a lossless video is already ready in the room, send it to the joining user immediately
+    if (hasLosslessVideo && streamUrl) {
+      socket.emit('lossless-video-ready', {
+        streamUrl,
+        fileName: room.videoState.fileName || 'Lossless Video',
       });
     }
   });

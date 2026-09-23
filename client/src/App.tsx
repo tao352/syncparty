@@ -13,6 +13,8 @@ export const App: React.FC = () => {
     id: string;
     isHost: boolean;
     initialVideoState?: VideoState;
+    initialLosslessVideo?: boolean;
+    initialStreamUrl?: string | null;
   } | null>(null);
   const [currentUser, setCurrentUser] = useState<{ name: string; socketId: string }>({
     name: '',
@@ -111,6 +113,8 @@ export const App: React.FC = () => {
         isHost: boolean;
         participants: Participant[];
         videoState: VideoState;
+        hasLosslessVideo?: boolean;
+        streamUrl?: string | null;
       }) => {
         setIsLoading(false);
         if (!res.success) {
@@ -126,6 +130,8 @@ export const App: React.FC = () => {
           id: res.roomId,
           isHost: res.isHost,
           initialVideoState: res.videoState,
+          initialLosslessVideo: res.hasLosslessVideo,
+          initialStreamUrl: res.streamUrl,
         });
       }
     );
@@ -160,6 +166,8 @@ export const App: React.FC = () => {
           currentUser={currentUser}
           initialParticipants={participants}
           initialVideoState={currentRoom.initialVideoState}
+          initialLosslessVideo={currentRoom.initialLosslessVideo}
+          initialStreamUrl={currentRoom.initialStreamUrl}
           onLeaveRoom={handleLeaveRoom}
         />
       )}
