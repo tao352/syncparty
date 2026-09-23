@@ -12,6 +12,7 @@ import {
   Maximize2,
   Minimize2,
   Crown,
+  MessageSquare,
 } from 'lucide-react';
 
 interface RoomPageProps {
@@ -39,6 +40,7 @@ export const RoomPage: React.FC<RoomPageProps> = ({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [reactions, setReactions] = useState<FloatingReaction[]>([]);
   const [isCinemaMode, setIsCinemaMode] = useState<boolean>(false);
+  const [mobileActiveTab, setMobileActiveTab] = useState<'video' | 'chat'>('video');
   const [isQualityModalOpen, setIsQualityModalOpen] = useState<boolean>(false);
   const [isAudioDuckingActive, setIsAudioDuckingActive] = useState<boolean>(false);
 
@@ -215,11 +217,37 @@ export const RoomPage: React.FC<RoomPageProps> = ({
           </div>
         </div>
 
+        {/* Mobile Tab Switcher (Video vs Chat) */}
+        <div className="flex md:hidden items-center bg-cinema-850 p-0.5 rounded-xl border border-cinema-800">
+          <button
+            onClick={() => setMobileActiveTab('video')}
+            className={`px-3 py-1 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all ${
+              mobileActiveTab === 'video'
+                ? 'bg-gold-500 text-cinema-950 shadow-sm'
+                : 'text-cinema-400 hover:text-cinema-100'
+            }`}
+          >
+            <Film className="w-3.5 h-3.5" />
+            <span>Video</span>
+          </button>
+          <button
+            onClick={() => setMobileActiveTab('chat')}
+            className={`px-3 py-1 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all ${
+              mobileActiveTab === 'chat'
+                ? 'bg-gold-500 text-cinema-950 shadow-sm'
+                : 'text-cinema-400 hover:text-cinema-100'
+            }`}
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>Chat ({messages.length})</span>
+          </button>
+        </div>
+
         <div className="flex items-center gap-2">
-          {/* Cinema Mode Toggle (Hides chat for full width) */}
+          {/* Cinema Mode Toggle (Desktop only) */}
           <button
             onClick={() => setIsCinemaMode((prev) => !prev)}
-            className={`p-1.5 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1.5 ${
+            className={`hidden md:flex p-1.5 rounded-lg text-xs font-medium border transition-colors items-center gap-1.5 ${
               isCinemaMode
                 ? 'bg-gold-500/10 border-gold-500/30 text-gold-400'
                 : 'bg-cinema-850 hover:bg-cinema-800 border-cinema-800 text-cinema-400 hover:text-cinema-100'
@@ -229,12 +257,12 @@ export const RoomPage: React.FC<RoomPageProps> = ({
             {isCinemaMode ? (
               <>
                 <Minimize2 className="w-3.5 h-3.5" />
-                <span className="hidden md:inline">Exit Cinema</span>
+                <span>Exit Cinema</span>
               </>
             ) : (
               <>
                 <Maximize2 className="w-3.5 h-3.5" />
-                <span className="hidden md:inline">Cinema Mode</span>
+                <span>Cinema Mode</span>
               </>
             )}
           </button>
@@ -251,23 +279,34 @@ export const RoomPage: React.FC<RoomPageProps> = ({
         </div>
       </header>
 
-      {/* Main View Area: Video on Left, Chat on Right */}
-      <div className="flex-1 flex overflow-hidden relative">
-        <VideoPlayer
-          isHost={isHost}
-          remoteStream={remoteStream}
-          onStreamReady={setMediaStream}
-          onVideoAction={emitVideoAction}
-          videoRef={videoRef}
-          reactions={reactions}
-          onOpenQualitySettings={() => setIsQualityModalOpen(true)}
-          isAudioDuckingActive={isAudioDuckingActive}
-          connectionStatus={connectionStatus}
-          onRequestStream={requestStreamFromHost}
-        />
+      {/* Main View Area: Responsive for Mobile & Desktop */}
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+        {/* Video Player Section */}
+        <div
+          className={`flex-1 h-full flex flex-col ${
+            mobileActiveTab === 'video' ? 'flex' : 'hidden md:flex'
+          }`}
+        >
+          <VideoPlayer
+            isHost={isHost}
+            remoteStream={remoteStream}
+            onStreamReady={setMediaStream}
+            onVideoAction={emitVideoAction}
+            videoRef={videoRef}
+            reactions={reactions}
+            onOpenQualitySettings={() => setIsQualityModalOpen(true)}
+            isAudioDuckingActive={isAudioDuckingActive}
+            connectionStatus={connectionStatus}
+            onRequestStream={requestStreamFromHost}
+          />
+        </div>
 
-        {/* Chat & Hangout Sidebar (Collapsible in cinema mode) */}
-        {!isCinemaMode && (
+        {/* Chat & Hangout Section */}
+        <div
+          className={`h-full ${
+            mobileActiveTab === 'chat' ? 'flex w-full' : 'hidden'
+          } ${!isCinemaMode ? 'md:flex md:w-80 md:shrink-0' : 'md:hidden'}`}
+        >
           <ChatAndHangout
             roomId={roomId}
             isHost={isHost}
@@ -279,7 +318,7 @@ export const RoomPage: React.FC<RoomPageProps> = ({
             onToggleMic={toggleMicrophone}
             isAudioDuckingActive={isAudioDuckingActive}
           />
-        )}
+        </div>
       </div>
 
       {/* Quality Settings Modal */}

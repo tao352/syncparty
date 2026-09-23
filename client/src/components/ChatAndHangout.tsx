@@ -61,7 +61,7 @@ export const ChatAndHangout: React.FC<ChatAndHangoutProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full bg-cinema-900 border-l border-cinema-800 w-80 shrink-0">
+    <div className="flex flex-col h-full bg-cinema-900 md:border-l border-cinema-800 w-full md:w-80 md:shrink-0">
       {/* Room Header & Share Bar */}
       <div className="p-4 border-b border-cinema-800">
         <div className="flex items-center justify-between mb-3">
