@@ -57,10 +57,11 @@ export function useWebRTC({
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
+  // Default to 720p @ 30fps at 1500 kbps (1.5 Mbps) for buttery smooth streaming on standard home upload
   const [qualitySettings, setQualitySettings] = useState<QualitySettings>({
-    resolution: '1080p',
-    frameRate: 60,
-    bitrateKbps: 6000,
+    resolution: '720p',
+    frameRate: 30,
+    bitrateKbps: 1500,
     hardwareAcceleration: true,
   });
 
@@ -95,10 +96,13 @@ export function useWebRTC({
           params.encodings = [{}];
         }
 
+        // CRITICAL FIX: Prioritize smooth framerate over resolution to eliminate lag and stutter!
+        (params as any).degradationPreference = 'maintain-framerate';
+
         if (settings.bitrateKbps > 0) {
           params.encodings[0].maxBitrate = settings.bitrateKbps * 1000;
         } else {
-          delete params.encodings[0].maxBitrate;
+          params.encodings[0].maxBitrate = 1500 * 1000;
         }
 
         params.encodings[0].maxFramerate = settings.frameRate;
@@ -112,6 +116,7 @@ export function useWebRTC({
         }
 
         await videoSender.setParameters(params);
+        console.log(`[WebRTC] Set quality: ${settings.resolution} @ ${settings.frameRate}fps, ${settings.bitrateKbps}kbps (maintain-framerate)`);
       } catch (err) {
         console.warn('[WebRTC] setParameters failed:', err);
       }

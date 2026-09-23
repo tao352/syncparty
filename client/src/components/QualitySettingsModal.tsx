@@ -21,31 +21,31 @@ export const QualitySettingsModal: React.FC<QualitySettingsModalProps> = ({
 
   const presets = [
     {
-      id: 'cinema',
-      name: 'Cinema 1080p',
-      desc: 'Max fidelity & crisp detail',
-      icon: Film,
-      resolution: '1080p' as ResolutionPreset,
-      frameRate: 60 as FrameRatePreset,
-      bitrateKbps: 8000,
-    },
-    {
-      id: 'standard',
-      name: 'Balanced 720p',
-      desc: 'Smooth 60 FPS & moderate bandwidth',
+      id: 'fast',
+      name: 'Ultra Smooth ⚡',
+      desc: 'Zero lag on home internet',
       icon: Zap,
       resolution: '720p' as ResolutionPreset,
-      frameRate: 60 as FrameRatePreset,
-      bitrateKbps: 4500,
+      frameRate: 30 as FrameRatePreset,
+      bitrateKbps: 1500,
     },
     {
       id: 'saver',
-      name: 'Smooth Saver',
-      desc: 'Ideal for mobile & slower connections',
+      name: 'Mobile Saver 📱',
+      desc: 'Lightweight for mobile data',
       icon: Smartphone,
       resolution: '480p' as ResolutionPreset,
+      frameRate: 24 as FrameRatePreset,
+      bitrateKbps: 800,
+    },
+    {
+      id: 'cinema',
+      name: 'Cinema 1080p 🌟',
+      desc: 'High upload fiber required',
+      icon: Film,
+      resolution: '1080p' as ResolutionPreset,
       frameRate: 30 as FrameRatePreset,
-      bitrateKbps: 2000,
+      bitrateKbps: 3000,
     },
   ];
 
@@ -176,18 +176,18 @@ export const QualitySettingsModal: React.FC<QualitySettingsModalProps> = ({
             </div>
             <input
               type="range"
-              min="1500"
-              max="10000"
-              step="500"
+              min="500"
+              max="5000"
+              step="250"
               disabled={!isHost}
               value={settings.bitrateKbps}
               onChange={(e) => onUpdate({ ...settings, bitrateKbps: Number(e.target.value) })}
               className={`w-full accent-gold-500 ${!isHost ? 'opacity-60 cursor-not-allowed' : ''}`}
             />
             <div className="flex justify-between text-[10px] text-cinema-600 mt-1">
-              <span>1.5 Mbps (Light)</span>
-              <span>6.0 Mbps</span>
-              <span>10.0 Mbps (Ultra)</span>
+              <span>0.5 Mbps (Light)</span>
+              <span>1.5 Mbps (Recommended)</span>
+              <span>5.0 Mbps (Fast Fiber)</span>
             </div>
           </div>
         </div>
