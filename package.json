@@ -1,0 +1,16 @@
+{
+  "name": "syncparty",
+  "version": "1.0.0",
+  "description": "Ultra-smooth private watch party web app with WebRTC local video streaming and quality controls",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev:server": "node server/server.js",
+    "dev:client": "npm --prefix client run dev",
+    "build:client": "npm --prefix client run build",
+    "build": "npm --prefix client run build",
+    "serve": "node server/server.js"
+  },
+  "keywords": ["webrtc", "watch-party", "video-sync", "streaming", "p2p"],
+  "author": "",
+  "license": "MIT"
+}
